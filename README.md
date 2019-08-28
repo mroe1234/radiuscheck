@@ -3,8 +3,8 @@ This tool depends on eapol_test.  It can be found:
 
 http://deployingradius.com/scripts/eapol_test/
 
-I build this script based on eapol_test v2.8-hostap_2_8. If they change the tool, this may break
-I used jq: https://stedolan.github.io/jq/ to do float math since bash only supports integer math.
+I build this script based on eapol_test v2.8-hostap_2_8. If they change the tool, this may break  
+I used jq (https://stedolan.github.io/jq/) to do float math since bash only supports integer math.
 If you use the telegraf option, you will need to install jq.
 
 Here is my telegraf plugin config.  I am querying two radius servers thus the two commands:
