@@ -1,0 +1,169 @@
+#!/bin/bash
+
+#########################
+#mus3
+#uses eapol_test command to interegate the radius server.
+#checks for cert expiration
+#gathers authenication-based performance metrics
+#telegraf output in units: seconds
+
+#Two modes, nagios and telegraf
+#-n for nagios, -c,-w for crit warning, defaults are sane
+#-t for telegraf
+
+#example conf file for peap/mschapv2
+# network={
+#     ssid="lehigh"
+#     key_mgmt=WPA-EAP
+#     eap=PEAP
+#     identity="username"
+#     password="password"
+#     phase2="autheap=MSCHAPV2"
+#     }
+#########################
+#Declarations
+EAPOL="/usr/local/bin/eapol_test"
+CONF="/etc/eapol_test.conf"
+
+NAGIOS='false'
+TELEGRAF='false'
+WARN=2592000 #30 days
+CRIT=0 #0 days
+
+if [ -z $EAPOL ]
+then
+    echo "Can't find eapol_test command"
+    exit 2
+fi
+if [ -z $CONF ]
+then
+    echo "Can't find config file"
+    exit 2
+fi
+
+while getopts :ntw:c:h: option
+do
+    case "${option}"
+      in
+	n) NAGIOS='true';;
+	t) TELEGRAF='true';;
+	w) WARNING=$OPTARG;;
+	c) CRITICAL=$OPTARG;;
+	h) HOST=$OPTARG;;
+    esac
+done
+
+#convert days to seconds
+if [ ! -z $WARNING ]
+then
+   WARN=$(( WARNING*86400 ))
+fi
+
+if [ ! -z $CRITICAL ]
+then
+    CRIT=$(( CRITICAL*86400 ))
+fi
+
+if [ -z "$HOST" ]
+then
+    echo "-h is required, please provide a hostname or IP"
+    exit 2
+fi
+   
+
+#if provided a hostname convert to IP address (eapol_test only supports IPs
+if [[ ! $HOST =~ ^((25[0-5]|2[0-4][0-9]|[01][0-9][0-9]|[0-9]{1,2})[.]){3}(25[0-5]|2[0-4][0-9]|[01][0-9][0-9]|[0-9]{1,2})$ ]]
+then
+    HOST=$(/usr/bin/dig +short +search $HOST)
+    #host nps1 | awk '{print $NF}'
+fi
+STARTNANO=$(date +%s%N)
+NOWSECS=$(date +%s)
+
+#Nagios Section
+if [[ $NAGIOS == 'true' ]]
+then
+    TMP=$(mktemp /tmp/radiuscert.XXXXXX)
+    OUTPUT=$($EAPOL -c $CONF -a $HOST -scisco99 -o $TMP)
+    FILESECS=$(date --utc --reference=$TMP +%s)
+    DELTA=$(($NOWSECS-$FILESECS))
+
+    #https://stackoverflow.com/questions/39615142/bash-get-last-line-from-a-variable
+    #http://www.tldp.org/LDP/abs/html/string-manipulation.html
+    #if last line if OUTPUT is equal to 'SUCCESS'
+    if ! [ "${OUTPUT##*$'\n'}" = 'SUCCESS' ]
+    then
+        echo "CRITICAL; Can't authenticate to radius server"
+        exit 2
+    fi
+    if (( $DELTA > '5' ))
+    then
+	echo "CRITICAL; Old certificate or execute time is too long"
+	exit 2
+    fi
+    awk -v temp="$TMP-split" 'split_after == 1 {n++;split_after=0}  /-----END CERTIFICATE-----/ {split_after=1}  {print > temp n ".pem"}' < $TMP
+    CERTS=${TMP}-split*
+    for C in $CERTS
+    do
+	if [[ $(head -n2 $C) == *"lehigh.edu"* ]]
+	then
+	    HUMANDATE=$(openssl x509 -in $C -noout -dates |grep "notAfter" | sed 's/^notAfter=//')
+	    DATE=$(date -d "$HUMANDATE" +"%s")
+
+            #clean up temp files
+	    #-f is to suppress diagnostic message of none existing
+	    /bin/rm "$TMP"
+	    /bin/rm $TMP-split*
+	    
+	    if (( $(($DATE-$NOWSECS)) < $CRIT ))
+	    then
+		echo "CRITICAL;Certificate expired $HUMANDATE"
+		exit 2
+	    fi
+	    if (( $(($DATE-$NOWSECS)) < $WARN ))
+	    then
+	       echo "WARN;Certificate expires $HUMANDATE"
+	       exit 1
+	    fi
+	    echo "OK;Certificate expires on $HUMANDATE"
+	    exit 0
+	fi
+    done
+
+    #clean up temp files
+    #-f is to suppress diagnostic message of none existing
+    /bin/rm "$TMP"
+    /bin/rm $TMP-split*
+
+    
+    echo "UNKNOWN; Can't find correct cert"
+    exit 3
+fi
+#End Nagios Section
+
+#Begin Telegraf Section
+if [[ $TELEGRAF == 'true' ]]
+then
+    OUTPUT=$($EAPOL -c $CONF -a $HOST -scisco99)
+    if ! [ "${OUTPUT##*$'\n'}" = 'SUCCESS' ]
+    then
+        echo "Can't authenticate to radius server"
+        exit 2
+    fi
+    POSTCOMMAND=$(date +%s%N)
+    #if IP convert to hostname and trim FQDN
+    if [[ $HOST =~ ^((25[0-5]|2[0-4][0-9]|[01][0-9][0-9]|[0-9]{1,2})[.]){3}(25[0-5]|2[0-4][0-9]|[01][0-9][0-9]|[0-9]{1,2})$ ]]
+    then
+	HOST=$(/usr/bin/dig +short -x $HOST | sed 's/\..*//')
+    fi
+
+    #%N outputs nano seconds, need to divide to get to milliseconds (microseconds is in between)
+#    echo "radius,host=$HOST authtime=$(( POSTCOMMAND-STARTNANO )) #nanoseconds"
+#    echo "radius,host=$HOST authtime=$(( (POSTCOMMAND-STARTNANO)/1000 )) #microseconds"
+#    echo "radius,host=$HOST authtime=$(( (POSTCOMMAND-STARTNANO)/1000000 )) #milliseconds"
+
+    #who knew jq could do math! pretty cool
+    printf "radius,host=$HOST authtime=%.3f\n" "$( jq -n "($POSTCOMMAND-$STARTNANO)/1000000000" )"
+    exit 0
+
+fi
