@@ -24,7 +24,9 @@
 #Declarations
 EAPOL="/usr/local/bin/eapol_test"
 CONF="/etc/eapol_test.conf"
-
+#If a full chain is presented by the radius server
+#Pick the cert you want to test
+CERTSTRING="lehigh.edu"
 NAGIOS='false'
 TELEGRAF='false'
 WARN=2592000 #30 days
@@ -105,7 +107,7 @@ then
     CERTS=${TMP}-split*
     for C in $CERTS
     do
-	if [[ $(head -n2 $C) == *"lehigh.edu"* ]]
+	if [[ $(head -n2 $C) =~ $CERTSTRING ]]
 	then
 	    HUMANDATE=$(openssl x509 -in $C -noout -dates |grep "notAfter" | sed 's/^notAfter=//')
 	    DATE=$(date -d "$HUMANDATE" +"%s")

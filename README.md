@@ -42,7 +42,8 @@ Telegraf:
 $ ./radiuscheck -t -h nps1
 radius,host=nps1 authtime=0.037
 ```
-Nagios:  
+Nagios:
+Don't forget to check the CERTSTRING variable to match the certificate of your organization.  
 ```
 $ /usr/local/bin/radiuscheck -n -h nps1 -w 30 -c 0
 OK;Certificate expires on Jul  8 15:10:35 2021 GMT
